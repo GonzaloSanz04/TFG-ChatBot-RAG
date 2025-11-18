@@ -22,7 +22,7 @@ EMBEDDING_DIM = 384
 # Configuración de la API de CKAN (la fuente de datos)
 CKAN_API_URL = "https://portal.guia.linkeddata.es/api/3/action/resource_search"
 
-#     Funciones de Elasticsearch ---
+#     Funciones de Elasticsearch
 
 def connect_to_elastic():
     """Se conecta a Elasticsearch y devuelve el cliente."""
