@@ -9,7 +9,7 @@ from sentence_transformers import SentenceTransformer
 from markitdown import MarkItDown
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# --- 1. Configuración Global ---
+#    Configuración Global
 
 # Configuración de Elasticsearch
 ELASTIC_URL = "http://localhost:9200" # El puerto que abriste en Docker
@@ -22,13 +22,12 @@ EMBEDDING_DIM = 384
 # Configuración de la API de CKAN (la fuente de datos)
 CKAN_API_URL = "https://portal.guia.linkeddata.es/api/3/action/resource_search"
 
-# --- 2. Funciones de Elasticsearch ---
+#     Funciones de Elasticsearch ---
 
 def connect_to_elastic():
     """Se conecta a Elasticsearch y devuelve el cliente."""
     print(f"Conectando a Elasticsearch en {ELASTIC_URL}...")
     try:
-        # Deshabilitamos la verificación de seguridad (ya que la quitamos en Docker)
         client = Elasticsearch(
             [{"host": "localhost", "port": 9200, "scheme": "http"}],
             verify_certs=False,
@@ -77,7 +76,7 @@ def create_index_mapping(client):
     except Exception as e:
         print(f"Error al crear el índice: {e}")
 
-# --- 3. Lógica de Procesamiento (Tus funciones de main.py) ---
+#    Lógica de Procesamiento
 
 def convert_pdf_to_markdown(pdf_content_bytes):
     """Convierte el contenido de un PDF (en bytes) a Markdown."""
@@ -93,13 +92,13 @@ def convert_pdf_to_markdown(pdf_content_bytes):
 def get_chunks_from_markdown(markdown_content):
     """Divide el Markdown usando RCTS."""
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1500, # Un poco más grande para mejor contexto
+        chunk_size=1500, 
         chunk_overlap=150,
         separators=["\n# ", "\n## ", "\n\n", ".\n", "\n", " ", ""]
     )
     return text_splitter.split_text(markdown_content)
 
-# --- 4. Lógica del Sincronizador (El núcleo) ---
+#    Lógica del Sincronizador
 
 def fetch_ckan_resources():
     """Obtiene la lista de todos los recursos PDF de la API."""
@@ -107,7 +106,7 @@ def fetch_ckan_resources():
     print(f"Llamando a la API de CKAN: {CKAN_API_URL}")
     try:
         response = requests.get(CKAN_API_URL, params=params)
-        response.raise_for_status() # Lanza un error si la petición falla (ej. 404, 500)
+        response.raise_for_status()
         data = response.json()
         
         if data.get("success"):
@@ -247,7 +246,7 @@ def run_sync_job(client, model):
     
     print("\n--- [ Trabajo de sincronización finalizado ] ---")
 
-# --- 5. Ejecución Principal y Programación ---
+#    Ejecución Principal
 
 if __name__ == "__main__":
     
