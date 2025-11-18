@@ -2,14 +2,14 @@ import os
 import json
 import requests
 import warnings
-from abc import ABC, abstractmethod  # Importamos las herramientas para clases abstractas
+from abc import ABC, abstractmethod 
 from elasticsearch import Elasticsearch
 from sentence_transformers import SentenceTransformer
 from google import genai
 from google.genai import types
 from groq import Groq
 
-# --- 1. Configuración Global ---
+#    CONFIGURACION GLOBAL
 
 ELASTIC_URL = "http://localhost:9200"
 INDEX_NAME = "guias_docentes"
@@ -106,7 +106,7 @@ class OllamaProvider(LLMProvider):
         except Exception as e:
             return f"ERROR Ollama: {e}"
 
-#   FACTORY (La Fábrica de Objetos) 
+#   FACTORY 
 
 def get_llm_provider() -> LLMProvider:
     """
@@ -195,11 +195,10 @@ def build_rag_prompt(query, context_chunks):
     RESPUESTA (basada solo en el contexto):
     """
 
-#   BUCLE PRINCIPAL
+#   BUCLE DEL CHATBOT
 
 if __name__ == "__main__":
     
-    # 1. Inicialización
     es_client = connect_to_elastic()
     embedding_model = load_embedding_model()
     
