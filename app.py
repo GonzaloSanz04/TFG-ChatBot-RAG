@@ -1,21 +1,19 @@
 import os
-import json 
+import json
 import requests
+import warnings
+from abc import ABC, abstractmethod  # Importamos las herramientas para clases abstractas
 from elasticsearch import Elasticsearch
 from sentence_transformers import SentenceTransformer
 from google import genai
 from google.genai import types
-import warnings
 from groq import Groq
+
 # --- 1. Configuración Global ---
 
 ELASTIC_URL = "http://localhost:9200"
 INDEX_NAME = "guias_docentes"
 MODEL_NAME = 'all-MiniLM-L6-v2'
-EMBEDDING_DIM = 384
-
-GEMINI_API_KEY = "AIzaSyAXpfeZtBGyX1uahQmngAMHTqRlMPmylQ0"
-GROQ_API_KEY = "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"
 
 try:
     with open('config.json', 'r') as f:
@@ -24,252 +22,224 @@ except FileNotFoundError:
     print("ERROR: No se encuentra el archivo config.json.")
     exit()
 
-# --- 2. Conexión y Carga de Modelos ---
+#   DEFINICIÓN DE LA INTERFAZ ABSTRACTA
 
+class LLMProvider(ABC):
+    @abstractmethod
+    def generate(self, prompt: str) -> str:
+        pass
+
+#   IMPLEMENTACIONES CONCRETAS DE LOS PROVEEDORES
+
+class GeminiProvider(LLMProvider):
+    def __init__(self, api_key, model_name):
+        self.api_key = api_key
+        self.model_name = model_name
+        
+    def generate(self, prompt: str) -> str:
+        if not self.api_key:
+            return "ERROR: Clave GEMINI_API_KEY no configurada."
+        try:
+            client = genai.Client(api_key=self.api_key)
+            # Instrucción del sistema (específica de Gemini)
+            sys_instr = "Eres un Asistente de Guías Docentes. Responde basándote SOLO en el contexto."
+            
+            response = client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=sys_instr,
+                    temperature=0.0
+                )
+            )
+            return response.text
+        except Exception as e:
+            return f"ERROR Gemini: {e}"
+
+class GroqProvider(LLMProvider):
+    def __init__(self, api_key, model_name):
+        self.api_key = api_key
+        self.model_name = model_name
+
+    def generate(self, prompt: str) -> str:
+        if not self.api_key:
+            return "ERROR: Clave GROQ_API_KEY no configurada."
+        try:
+            client = Groq(api_key=self.api_key)
+            sys_instr = "Eres un Asistente de Guías Docentes. Responde basándote SOLO en el contexto."
+            
+            chat = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": sys_instr},
+                    {"role": "user", "content": prompt}
+                ],
+                model=self.model_name,
+                temperature=0.0
+            )
+            return chat.choices[0].message.content
+        except Exception as e:
+            return f"ERROR Groq: {e}"
+
+class OllamaProvider(LLMProvider):
+    def __init__(self, api_url, model_name):
+        self.api_url = api_url
+        self.model_name = model_name
+
+    def generate(self, prompt: str) -> str:
+        try:
+            # Ollama no usa system instruction, así que lo pegamos al prompt
+            sys_instr = "Eres un Asistente de Guías Docentes. Responde basándote SOLO en el contexto.\n\n"
+            full_prompt = sys_instr + prompt
+            
+            response = requests.post(
+                self.api_url,
+                json={
+                    "model": self.model_name, 
+                    "prompt": full_prompt, 
+                    "stream": False,
+                    "options": {"temperature": 0.0}
+                },
+                timeout=300
+            )
+            response.raise_for_status()
+            return response.json()["response"]
+        except Exception as e:
+            return f"ERROR Ollama: {e}"
+
+#   FACTORY (La Fábrica de Objetos) 
+
+def get_llm_provider() -> LLMProvider:
+    """
+    Lee la configuración y devuelve la instancia de la clase correcta.
+    """
+    active_llm = CONFIG["active_llm"]
+    options = CONFIG["llm_options"].get(active_llm)
+    
+    if not options:
+        raise ValueError(f"Configuración no encontrada para: {active_llm}")
+
+    if active_llm == "gemini":
+        return GeminiProvider(
+            api_key=options.get("api_key"),
+            model_name=options["model"]
+        )
+    elif active_llm == "groq":
+        return GroqProvider(
+            api_key=options.get("api_key"),
+            model_name=options["model"]
+        )
+    elif active_llm == "ollama":
+        return OllamaProvider(
+            api_url=options["api_url"],
+            model_name=options["model"]
+        )
+    else:
+        raise ValueError(f"Proveedor desconocido: {active_llm}")
+
+#   Conexión con la base de datos
 def connect_to_elastic():
-    """Se conecta a Elasticsearch y devuelve el cliente."""
     print(f"Conectando a Elasticsearch en {ELASTIC_URL}...")
     try:
-        # Suprimir advertencias
         warnings.filterwarnings("ignore", "Connecting to",)
-        
         client = Elasticsearch(
-            ELASTIC_URL,
-            verify_certs=False,
-            ssl_show_warn=False,
-            request_timeout=10 
+            [{"host": "localhost", "port": 9200, "scheme": "http"}],
+            verify_certs=False, ssl_show_warn=False, request_timeout=10 
         )
-        if client.ping():
+        if client.info():
             print("¡Conexión con Elasticsearch exitosa!")
             return client
-        else:
-            print("No se pudo conectar con Elasticsearch.")
-            return None
     except Exception as e:
         print(f"Error conectando a Elasticsearch: {e}")
         return None
 
+#   Cargar el embedding
 def load_embedding_model():
-    """Carga el modelo SentenceTransformer en memoria."""
     print(f"Cargando modelo de embedding...")
     try:
-        model = SentenceTransformer(MODEL_NAME)
-        print("Modelo de embedding listo.")
-        return model
+        return SentenceTransformer(MODEL_NAME)
     except Exception as e:
-        print(f"Error al cargar el modelo de embedding: {e}")
+        print(f"Error al cargar modelo: {e}")
         return None
 
-# --- 3. Lógica del RAG (Retrieve & Generate) ---
-
-def search_retriever(client, model, query_text, top_k=5):
-    """
-    Vectoriza la consulta y realiza una búsqueda kNN en Elasticsearch
-    para encontrar los chunks de contexto más relevantes.
-    """
-    
-    # 1. Vectorizar la consulta
-    query_vector = model.encode(query_text).tolist()
-
-    # 2. Construir la consulta para Elasticsearch
-    knn_query = {
-        "knn": {
-            "field": "embedding_vector", # El campo que definimos en el mapping
-            "query_vector": query_vector,
-            "k": top_k,
-            "num_candidates": 20
-        },
-        "_source": ["chunk_text", "document_url"] # Solo queremos el texto y la URL
-    }
-    
+#   Búsqueda de los chunks más relevantes
+def search_retriever(client, model, query_text, top_k=8):
     try:
+        query_vector = model.encode(query_text).tolist()
+        knn_query = {
+            "knn": {
+                "field": "embedding_vector",
+                "query_vector": query_vector,
+                "k": top_k,
+                "num_candidates": 20
+            },
+            "_source": ["chunk_text", "document_url"]
+        }
         response = client.search(index=INDEX_NAME, body=knn_query)
-        
-        # 3. Parsear los resultados
         hits = response['hits']['hits']
-        context_chunks = []
-        sources = set() # Usamos un set para evitar URLs duplicadas
-        
-        for hit in hits:
-            context_chunks.append(hit['_source']['chunk_text'])
-            sources.add(hit['_source']['document_url'])
-            
-        return context_chunks, list(sources)
-    
+        context_chunks = [hit['_source']['chunk_text'] for hit in hits]
+        sources = list(set(hit['_source']['document_url'] for hit in hits))
+        return context_chunks, sources
     except Exception as e:
-        print(f"Error en la búsqueda de Elasticsearch: {e}")
+        print(f"Error búsqueda: {e}")
         return [], []
 
+#   Generar el prompt
 def build_rag_prompt(query, context_chunks):
-    """Función auxiliar para construir el prompt RAG."""
     context = "\n---\n".join(context_chunks)
-    
-    # Nota: Los 'system_instruction' se manejan de forma diferente en cada API.
-    # Los definiremos dentro de cada función de llamada.
-    
-    rag_prompt = f"""
+    return f"""
     CONTEXTO:
     ---
     {context}
     ---
-    
     PREGUNTA: {query}
-    
     RESPUESTA (basada solo en el contexto):
     """
-    return rag_prompt
 
-def generate_response(query, context_chunks):
-    """
-    Función principal modular: Lee el config y llama al LLM activo.
-    """
-    # Primero, comprueba si hay contexto
-    if not context_chunks:
-        return "Lo siento, no he podido encontrar información relevante sobre esa consulta en las guías docentes."
-
-    # Construye el prompt
-    rag_prompt = build_rag_prompt(query, context_chunks)
-    
-    # Lee la configuración
-    active_llm = CONFIG["active_llm"]
-    options = CONFIG["llm_options"][active_llm]
-    
-    # Decide a qué función llamar
-    if active_llm == "gemini":
-        # Usa la clave API definida globalmente
-        if not GEMINI_API_KEY:
-            return "ERROR: Clave GEMINI_API_KEY no definida en el script."
-        return generate_with_gemini(options["model"], GEMINI_API_KEY, rag_prompt)
-    
-    elif active_llm == "groq":
-        # Usa la clave API definida globalmente
-        if not GROQ_API_KEY:
-            return "ERROR: Clave GROQ_API_KEY no definida en el script."
-        return generate_with_groq(options["model"], GROQ_API_KEY, rag_prompt)
-
-    elif active_llm == "ollama":
-        return generate_with_ollama(options["model"], options["api_url"], rag_prompt)
-
-    else:
-        return f"ERROR: LLM '{active_llm}' no reconocido en config.json."
-
-def generate_with_gemini(model, api_key, rag_prompt):
-    """Llama a la API de Gemini."""
-    try:
-        client = genai.Client(api_key=api_key)
-        system_instruction = (
-            "Eres un Asistente de Guías Docentes de la UPM. "
-            "Basa tu respuesta *única y exclusivamente* en el CONTEXTO proporcionado. "
-            "Si la información no está en el CONTEXTO, indica que no puedes responder."
-        )
-        response = client.models.generate_content(
-            model=model,
-            contents=rag_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.0
-            )
-        )
-        return response.text
-    except Exception as e:
-        return f"ERROR en API Gemini: {e}"
-
-def generate_with_groq(model, api_key, rag_prompt):
-    """Llama a la API de Groq (usando la estructura de OpenAI)."""
-    try:
-        client = Groq(api_key=api_key)
-        system_instruction = (
-            "Eres un Asistente de Guías Docentes de la UPM. "
-            "Basa tu respuesta *única y exclusivamente* en el CONTEXTO proporcionado. "
-            "Si la información no está en el CONTEXTO, indica que no puedes responder."
-        )
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": rag_prompt}
-            ],
-            model=model,
-            temperature=0.0
-        )
-        return chat_completion.choices[0].message.content
-    except Exception as e:
-        return f"ERROR en API Groq: {e}"
-
-def generate_with_ollama(model, api_url, rag_prompt):
-    """Llama a un servidor local de Ollama."""
-    try:
-        system_instruction = (
-            "Eres un Asistente de Guías Docentes de la UPM. "
-            "Basa tu respuesta *única y exclusivamente* en el CONTEXTO proporcionado. "
-            "Si la información no está en el CONTEXTO, indica que no puedes responder."
-        )
-        full_prompt = f"{system_instruction}\n\n{rag_prompt}"
-
-        response = requests.post(
-            api_url,
-            json={
-                "model": model,
-                "prompt": full_prompt,
-                "stream": False,
-                "options": {"temperature": 0.0}
-            },
-            timeout=600
-        )
-        response.raise_for_status()
-        return response.json()["response"]
-    except Exception as e:
-        return f"ERROR en API Ollama (¿Está corriendo en localhost:11434?): {e}"   
-
-# --- 4. Bucle Principal de la Aplicación ---
+#   BUCLE PRINCIPAL
 
 if __name__ == "__main__":
     
-    # 1. Cargar todo al inicio
+    # 1. Inicialización
     es_client = connect_to_elastic()
     embedding_model = load_embedding_model()
+    
+    try:
+        llm_engine = get_llm_provider() # Cargamos el LLM activo 
+        print(f"Model cargado: {type(llm_engine).__name__}")
+    except Exception as e:
+        print(f"Error al configurar LLM: {e}")
+        exit()
 
     if not es_client or not embedding_model:
-        print("\nError fatal al inicializar los componentes.")
         exit()
 
     print("\n" + "="*50)
     print(f"   Asistente RAG (LLM Activo: {CONFIG['active_llm']})")    
     print("="*50)
-    print("¡Hola! Escribe tu pregunta sobre las guías docentes.")
-    print("Escribe 'salir' o presiona Ctrl+C para terminar.")
 
     try:
         while True:
-            # 2. Obtener la pregunta del usuario
             user_query = input("\n[Pregunta]: ")
-            if user_query.lower() in ['salir', 'exit', 'quit']:
-                break
+            if user_query.lower() in ['salir', 'exit']: break
             
-            print("... buscando en la base de datos vectorial ...")
+            print("... recuperando contexto ...")
+            chunks, sources = search_retriever(es_client, embedding_model, user_query, top_k=8)
             
-            # 3. Fase de Recuperación (Retrieve)
-            chunks, sources = search_retriever(
-                es_client, 
-                embedding_model, 
-                user_query,
-                top_k=8 # Pedimos 5 chunks relevantes
-            )
+            if not chunks:
+                print("No se encontró información relevante.")
+                continue
+
+            # Usamos el método generate() de la interfaz abstracta
+            print("... generando respuesta ...")
+            prompt = build_rag_prompt(user_query, chunks)
+            answer = llm_engine.generate(prompt)
             
-            print(f"... {len(chunks)} fragmentos relevantes encontrados ...")
-            
-            # 4. Fase de Generación (Generate)
-            answer = generate_response(user_query, chunks)
-            
-            # 5. Mostrar la respuesta
             print("\n[Respuesta]:")
             print(answer)
             
             if sources:
-                print("\nFuentes consultadas:")
-                for url in sources:
-                    print(f"- {url}")
+                print("\nFuentes:")
+                for url in sources: print(f"- {url}")
 
     except KeyboardInterrupt:
-        print("\nCerrando aplicación...")
-    
-    print("\n¡Hasta luego!")
+        print("\nCerrando...")
