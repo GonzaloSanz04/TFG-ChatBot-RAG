@@ -12,8 +12,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 #    Configuración Global
 
 # Configuración de Elasticsearch
-ELASTIC_URL = "http://localhost:9200" # El puerto que abriste en Docker
-INDEX_NAME = "guias_docentes"        # El nombre de nuestra base de datos
+ELASTIC_URL = "http://localhost:9200"
+INDEX_NAME = "guias_docentes"   
 
 # Configuración del Modelo de Embedding (debe coincidir con el mapping)
 MODEL_NAME = 'all-MiniLM-L6-v2'
